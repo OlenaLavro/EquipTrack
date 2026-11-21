@@ -1,8 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client"
   output   = "../src/generated/prisma"
@@ -10,4 +5,103 @@ generator client {
 
 datasource db {
   provider = "mysql"
+}
+
+enum Role {
+  ADMIN
+  MANAGER
+  WORKER
+}
+
+enum AssetStatus {
+  ACTIVE
+  BROKEN
+  MAINTENANCE
+  RETIRED
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  REJECTED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+}
+model Organization {
+  id        Int      @id @default(autoincrement())
+  name      String
+  users     User[]
+  sites     Site[]
+  createdAt DateTime @default(now())
+}
+model User {
+  id             Int          @id @default(autoincrement())
+  email          String       @unique
+  passwordHash   String
+  name           String
+  role           Role         @default(WORKER)
+  pushToken      String?
+
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  organizationId Int
+
+  reportedTickets Ticket[] @relation("ReportedBy")
+  assignedTickets Ticket[] @relation("AssignedTo")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+}
+model Site {
+  id             Int          @id @default(autoincrement())
+  name           String
+  address        String?
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  organizationId Int
+  assets         Asset[]
+
+  @@index([organizationId])
+}
+model Asset {
+  id           Int         @id @default(autoincrement())
+  name         String
+  type         String
+  serialNumber String?
+  qrCode       String      @unique   // унікальний індекс: пошук по QR = O(log n), а не full scan
+  status       AssetStatus @default(ACTIVE)
+  site         Site        @relation(fields: [siteId], references: [id])
+  siteId       Int
+  tickets      Ticket[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([siteId])
+}
+model Ticket {
+  id          Int            @id @default(autoincrement())
+  title       String
+  description String?        @db.Text
+  photoUrl    String?
+  status      TicketStatus   @default(OPEN)
+  priority    TicketPriority @default(MEDIUM)
+
+  asset        Asset @relation(fields: [assetId], references: [id])
+  assetId      Int
+  reportedBy   User  @relation("ReportedBy", fields: [reportedById], references: [id])
+  reportedById Int
+  assignee     User? @relation("AssignedTo", fields: [assigneeId], references: [id])
+  assigneeId   Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([assetId, status])
+  @@index([assigneeId])
 }
