@@ -73,7 +73,7 @@ model Asset {
   name         String
   type         String
   serialNumber String?
-  qrCode       String      @unique   // унікальний індекс: пошук по QR = O(log n), а не full scan
+  qrCode       String      @unique  
   status       AssetStatus @default(ACTIVE)
   site         Site        @relation(fields: [siteId], references: [id])
   siteId       Int
