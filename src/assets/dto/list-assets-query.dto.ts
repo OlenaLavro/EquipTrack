@@ -1,21 +1,10 @@
 import { Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsEnum, IsInt, IsOptional } from 'class-validator';
+
 import { AssetStatus } from '../../generated/prisma/client.js';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto.js';
 
-export class ListAssetsQueryDto {
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page: number = 1;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  limit: number = 20;
-
+export class ListAssetsQueryDto extends PaginationQueryDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
