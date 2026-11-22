@@ -113,7 +113,7 @@ export class TicketsService {
               id: ticket.assetId,
               status: { not: AssetStatus.RETIRED },
             },
-            data: { status: AssetStatus.ACTIVE },
+            data: { status: AssetStatus.ACTIVE }, 
           });
         }
       }
