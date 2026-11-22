@@ -30,11 +30,12 @@ export function canTransition(from: TicketStatus, to: TicketStatus): boolean {
 export class TicketsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateTicketDto, reportedById: number) {
+  async create(dto: CreateTicketDto, reportedById: number, orgId: number) {
     return this.prisma.$transaction(async (tx) => {
-      const asset = await tx.asset.findUnique({
+      const asset = await tx.asset.findFirst({
         where: {
           id: dto.assetId,
+          site: { organizationId: orgId },
         },
       });
 
@@ -67,10 +68,10 @@ export class TicketsService {
     });
   }
 
-  async changeStatus(id: number, status: TicketStatus, _userId: number) {
+  async changeStatus(id: number, status: TicketStatus, orgId: number) {
     return this.prisma.$transaction(async (tx) => {
-      const ticket = await tx.ticket.findUnique({
-        where: { id },
+      const ticket = await tx.ticket.findFirst({
+        where: { id, asset: { site: { organizationId: orgId } } },
       });
 
       if (!ticket) {
@@ -123,12 +124,10 @@ export class TicketsService {
     });
   }
 
-  async assign(id: number, assigneeId: number) {
+  async assign(id: number, assigneeId: number, orgId: number) {
     return this.prisma.$transaction(async (tx) => {
-      const ticket = await tx.ticket.findUnique({
-        where: {
-          id,
-        },
+      const ticket = await tx.ticket.findFirst({
+        where: { id, asset: { site: { organizationId: orgId } } },
       });
 
       if (!ticket) {
@@ -144,14 +143,14 @@ export class TicketsService {
         );
       }
 
-      // TODO(auth): assignee must belong to the same organization as the ticket
-      const asignee = await tx.user.findUnique({
+      const assignee = await tx.user.findFirst({
         where: {
           id: assigneeId,
+          organizationId: orgId,
         },
       });
 
-      if (!asignee) {
+      if (!assignee) {
         throw new NotFoundException(`User ${assigneeId} not found`);
       }
 
@@ -167,14 +166,16 @@ export class TicketsService {
     });
   }
 
-  async findAll({
-    page,
-    limit,
-    status,
-    assetId,
-    assigneeId,
-  }: ListTicketsQueryDto) {
-    const where: Prisma.TicketWhereInput = { status, assetId, assigneeId };
+  async findAll(
+    { page, limit, status, assetId, assigneeId }: ListTicketsQueryDto,
+    orgId: number,
+  ) {
+    const where: Prisma.TicketWhereInput = {
+      status,
+      assetId,
+      assigneeId,
+      asset: { site: { organizationId: orgId } },
+    };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.ticket.findMany({
         where,
@@ -190,9 +191,9 @@ export class TicketsService {
     };
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, orgId: number) {
     const ticket = await this.prisma.ticket.findUnique({
-      where: { id },
+      where: { id, asset: { site: { organizationId: orgId } } },
       include: {
         asset: true,
         reportedBy: { select: { id: true, name: true } },

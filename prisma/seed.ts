@@ -1,5 +1,7 @@
 import 'dotenv/config';
 import { PrismaMariaDb } from '@prisma/adapter-mariadb';
+import { hash } from 'bcryptjs';
+
 import { PrismaClient } from '../src/generated/prisma/client.js';
 
 const prisma = new PrismaClient({
@@ -8,15 +10,26 @@ const prisma = new PrismaClient({
 
 async function main() {
   const org = await prisma.organization.create({ data: { name: 'BuildCo' } });
+  const passwordHash = await hash('password123', 10);
 
   const [manager, worker] = await Promise.all([
     prisma.user.create({
-      data: { email: 'manager@buildco.test', name: 'Mira Manager', role: 'MANAGER',
-              passwordHash: 'TODO-day2', organizationId: org.id },
+      data: {
+        email: 'manager@buildco.test',
+        name: 'Mira Manager',
+        role: 'MANAGER',
+        passwordHash,
+        organizationId: org.id,
+      },
     }),
     prisma.user.create({
-      data: { email: 'worker@buildco.test', name: 'Will Worker', role: 'WORKER',
-              passwordHash: 'TODO-day2', organizationId: org.id },
+      data: {
+        email: 'worker@buildco.test',
+        name: 'Will Worker',
+        role: 'WORKER',
+        passwordHash,
+        organizationId: org.id,
+      },
     }),
   ]);
 
@@ -46,5 +59,8 @@ async function main() {
 }
 
 main()
-  .catch((e) => { console.error(e); process.exit(1); })
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
   .finally(() => prisma.$disconnect());
