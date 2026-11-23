@@ -8,9 +8,12 @@ import { AssetStatus, TicketStatus } from '../generated/prisma/enums.js';
 describe('canTransition', () => {
   it.each([
     [TicketStatus.OPEN, TicketStatus.IN_PROGRESS, true],
+    [TicketStatus.OPEN, TicketStatus.REJECTED, true],
     [TicketStatus.IN_PROGRESS, TicketStatus.DONE, true],
     [TicketStatus.IN_PROGRESS, TicketStatus.OPEN, true],
+    [TicketStatus.IN_PROGRESS, TicketStatus.REJECTED, true],
     [TicketStatus.OPEN, TicketStatus.OPEN, false],
+    [TicketStatus.OPEN, TicketStatus.DONE, false],
     [TicketStatus.DONE, TicketStatus.OPEN, false],
     [TicketStatus.REJECTED, TicketStatus.IN_PROGRESS, false],
   ])('%s → %s = %s', (from, to, expected) => {
@@ -20,6 +23,12 @@ describe('canTransition', () => {
 
 describe('TicketsService', () => {
   let service: TicketsService;
+
+  const orgId = 100;
+  const userId = 7;
+  const assigneeId = 42;
+  const assetId = 1;
+  const ticketId = 10;
 
   const prisma = {
     $transaction: vi.fn(),
@@ -49,30 +58,30 @@ describe('TicketsService', () => {
   });
 
   describe('create', () => {
-    const dto = { assetId: 1, title: 'Hydraulic leak' };
+    const dto = { assetId, title: 'Hydraulic leak' };
 
     it('creates OPEN ticket and marks asset BROKEN', async () => {
       prisma.asset.findFirst.mockResolvedValue({
-        id: 1,
+        id: assetId,
         status: AssetStatus.ACTIVE,
       });
       prisma.ticket.create.mockResolvedValue({
-        id: 10,
+        id: ticketId,
         status: TicketStatus.OPEN,
       });
 
-      const result = await service.create(dto, 7, 100);
+      const result = await service.create(dto, userId, orgId);
 
-      expect(result).toEqual({ id: 10, status: TicketStatus.OPEN });
+      expect(result).toEqual({ id: ticketId, status: TicketStatus.OPEN });
       expect(prisma.ticket.create).toHaveBeenCalledWith({
         data: expect.objectContaining({
-          assetId: 1,
-          reportedById: 7,
+          assetId,
+          reportedById: userId,
           status: TicketStatus.OPEN,
         }),
       });
       expect(prisma.asset.update).toHaveBeenCalledWith({
-        where: { id: 1 },
+        where: { id: assetId },
         data: { status: AssetStatus.BROKEN },
       });
     });
@@ -80,22 +89,22 @@ describe('TicketsService', () => {
     it('throws 404 when asset is not in user organization', async () => {
       prisma.asset.findFirst.mockResolvedValue(null);
 
-      await expect(service.create(dto, 7, 100)).rejects.toThrow(
+      await expect(service.create(dto, userId, orgId)).rejects.toThrow(
         NotFoundException,
       );
       expect(prisma.asset.findFirst).toHaveBeenCalledWith({
-        where: { id: 1, site: { organizationId: 100 } },
+        where: { id: assetId, site: { organizationId: orgId } },
       });
       expect(prisma.ticket.create).not.toHaveBeenCalled();
     });
 
     it('throws 409 for retired asset', async () => {
       prisma.asset.findFirst.mockResolvedValue({
-        id: 1,
+        id: assetId,
         status: AssetStatus.RETIRED,
       });
 
-      await expect(service.create(dto, 7, 100)).rejects.toThrow(
+      await expect(service.create(dto, userId, orgId)).rejects.toThrow(
         ConflictException,
       );
       expect(prisma.ticket.create).not.toHaveBeenCalled();
@@ -103,63 +112,78 @@ describe('TicketsService', () => {
   });
 
   describe('changeStatus', () => {
+    it('throws 404 when ticket is not found', async () => {
+      prisma.ticket.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.changeStatus(ticketId, TicketStatus.IN_PROGRESS, orgId),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.ticket.updateMany).not.toHaveBeenCalled();
+    });
+
     it('throws 409 on forbidden transition', async () => {
       prisma.ticket.findFirst.mockResolvedValue({
-        id: 10,
-        assetId: 1,
+        id: ticketId,
+        assetId,
         status: TicketStatus.DONE,
       });
 
       await expect(
-        service.changeStatus(10, TicketStatus.OPEN, 100),
+        service.changeStatus(ticketId, TicketStatus.OPEN, orgId),
       ).rejects.toThrow(ConflictException);
       expect(prisma.ticket.updateMany).not.toHaveBeenCalled();
     });
 
     it('throws 409 when ticket was changed concurrently', async () => {
       prisma.ticket.findFirst.mockResolvedValue({
-        id: 10,
-        assetId: 1,
+        id: ticketId,
+        assetId,
         status: TicketStatus.IN_PROGRESS,
       });
       prisma.ticket.updateMany.mockResolvedValue({ count: 0 });
 
       await expect(
-        service.changeStatus(10, TicketStatus.DONE, 100),
+        service.changeStatus(ticketId, TicketStatus.DONE, orgId),
       ).rejects.toThrow(ConflictException);
       expect(prisma.asset.updateMany).not.toHaveBeenCalled();
     });
 
-    it('marks asset ACTIVE when all other tickets are done', async () => {
+    it('marks asset ACTIVE when all other tickets are done or rejected', async () => {
       prisma.ticket.findFirst.mockResolvedValue({
-        id: 10,
-        assetId: 1,
+        id: ticketId,
+        assetId,
         status: TicketStatus.IN_PROGRESS,
       });
 
       prisma.ticket.updateMany.mockResolvedValue({ count: 1 });
       prisma.ticket.count.mockResolvedValue(0);
       prisma.ticket.findUniqueOrThrow.mockResolvedValue({
-        id: 10,
-        assetId: 1,
+        id: ticketId,
+        assetId,
         status: TicketStatus.DONE,
       });
-      const result = await service.changeStatus(10, TicketStatus.DONE, 100);
+
+      const result = await service.changeStatus(
+        ticketId,
+        TicketStatus.DONE,
+        orgId,
+      );
+
       expect(result).toEqual({
-        id: 10,
-        assetId: 1,
+        id: ticketId,
+        assetId,
         status: TicketStatus.DONE,
       });
       expect(prisma.ticket.count).toHaveBeenCalledWith({
         where: {
-          assetId: 1,
-          id: { not: 10 },
+          assetId,
+          id: { not: ticketId },
           status: { in: [TicketStatus.OPEN, TicketStatus.IN_PROGRESS] },
         },
       });
       expect(prisma.asset.updateMany).toHaveBeenCalledWith({
         where: {
-          id: 1,
+          id: assetId,
           status: { not: AssetStatus.RETIRED },
         },
         data: { status: AssetStatus.ACTIVE },
@@ -168,39 +192,92 @@ describe('TicketsService', () => {
 
     it('does not mark asset ACTIVE when another active ticket still exists', async () => {
       prisma.ticket.findFirst.mockResolvedValue({
-        id: 10,
-        assetId: 1,
+        id: ticketId,
+        assetId,
         status: TicketStatus.IN_PROGRESS,
       });
       prisma.ticket.updateMany.mockResolvedValue({ count: 1 });
       prisma.ticket.count.mockResolvedValue(1);
       prisma.ticket.findUniqueOrThrow.mockResolvedValue({
-        id: 10,
-        assetId: 1,
+        id: ticketId,
+        assetId,
         status: TicketStatus.DONE,
       });
 
-      await service.changeStatus(10, TicketStatus.DONE, 100);
+      await service.changeStatus(ticketId, TicketStatus.DONE, orgId);
 
       expect(prisma.ticket.count).toHaveBeenCalledTimes(1);
+      expect(prisma.asset.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('does not touch asset status when transitioning from OPEN to IN_PROGRESS', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: ticketId,
+        assetId,
+        status: TicketStatus.OPEN,
+      });
+      prisma.ticket.updateMany.mockResolvedValue({ count: 1 });
+      prisma.ticket.findUniqueOrThrow.mockResolvedValue({
+        id: ticketId,
+        assetId,
+        status: TicketStatus.IN_PROGRESS,
+      });
+
+      await service.changeStatus(ticketId, TicketStatus.IN_PROGRESS, orgId);
+
+      expect(prisma.ticket.count).not.toHaveBeenCalled();
       expect(prisma.asset.updateMany).not.toHaveBeenCalled();
     });
   });
 
   describe('assign', () => {
+    it('assigns ticket to user from the same organization', async () => {
+      prisma.ticket.findFirst.mockResolvedValue({
+        id: ticketId,
+        assetId,
+        status: TicketStatus.OPEN,
+      });
+      prisma.user.findFirst.mockResolvedValue({
+        id: assigneeId,
+        organizationId: orgId,
+      });
+      prisma.ticket.update.mockResolvedValue({
+        id: ticketId,
+        assignedToId: assigneeId,
+      });
+
+      const result = await service.assign(ticketId, assigneeId, orgId);
+
+      expect(result).toEqual({ id: ticketId, assignedToId: assigneeId });
+      expect(prisma.ticket.update).toHaveBeenCalledWith({
+        where: { id: ticketId },
+        data: { assignedToId: assigneeId },
+      });
+    });
+
+    it('throws 404 when ticket is not found', async () => {
+      prisma.ticket.findFirst.mockResolvedValue(null);
+
+      await expect(service.assign(ticketId, assigneeId, orgId)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(prisma.user.findFirst).not.toHaveBeenCalled();
+      expect(prisma.ticket.update).not.toHaveBeenCalled();
+    });
+
     it('throws 404 when assignee is from another organization', async () => {
       prisma.ticket.findFirst.mockResolvedValue({
-        id: 10,
-        assetId: 1,
+        id: ticketId,
+        assetId,
         status: TicketStatus.OPEN,
       });
       prisma.user.findFirst.mockResolvedValue(null);
 
-      await expect(service.assign(10, 42, 100)).rejects.toThrow(
+      await expect(service.assign(ticketId, assigneeId, orgId)).rejects.toThrow(
         NotFoundException,
       );
       expect(prisma.user.findFirst).toHaveBeenCalledWith({
-        where: { id: 42, organizationId: 100 },
+        where: { id: assigneeId, organizationId: orgId },
       });
       expect(prisma.ticket.update).not.toHaveBeenCalled();
     });
